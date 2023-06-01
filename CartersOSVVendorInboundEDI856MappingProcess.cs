@@ -509,6 +509,8 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                 int currentPackLevelId = 0;
                 int currentItemLevelId = 0;
 
+                int PARENT_ID_FOR_I_LEVEL_EQUAL_P_LEVEL_HIREID = 0;
+
                 translatedDoc856.SENDER = ediDocument.Segments[11].Values[2];
                 translatedDoc856.RECEIVER = "CARTERS";
 
@@ -819,6 +821,7 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                         else if (ediDocument.Segments[i].Values[3] == "P")
                         {
                             currentHierarchyId++;
+                            PARENT_ID_FOR_I_LEVEL_EQUAL_P_LEVEL_HIREID = currentHierarchyId;
                             currentPackLevelId = currentOrderLevelId;
 
 
@@ -952,7 +955,8 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                         else if (ediDocument.Segments[i].Values[3] == "I")
                         {
                             currentHierarchyId++;
-                            currentItemLevelId = currentHierarchyId - 1;
+                            //currentItemLevelId = currentHierarchyId - 1;
+                            currentItemLevelId = PARENT_ID_FOR_I_LEVEL_EQUAL_P_LEVEL_HIREID;
 
                             //Initiate new ITEM Level:
                             DataSolutions.DataModels.Xml.ShipNotice.DETAIL itemLevel = new DataSolutions.DataModels.Xml.ShipNotice.DETAIL();
