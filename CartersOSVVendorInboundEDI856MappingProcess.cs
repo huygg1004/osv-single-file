@@ -1,4 +1,4 @@
-﻿using DataSolutions.ApplicationFramework;
+using DataSolutions.ApplicationFramework;
 using DataSolutions.Commons.EDI.EdiTools;
 using DataSolutions.Commons.FileMovementRetry;
 using DataSolutions.DataModels.Xml.ShipNotice;
@@ -30,7 +30,8 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
         private readonly string _ReportFolder;
         private readonly string _xfailedFolder;
 
-        public bool _AlreadyArchive_INFILE;
+        public bool _IsIN_File;
+        public string _Original_IN_File_Path;
 
         private readonly string _fileRetryMovement_Connection_String;
 
@@ -82,13 +83,12 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                         // Copy the file to a new path with the ".edi" extension
                         File.Copy(file.FullName, newFileName);
 
-                        // Move the original ".in" file to the archive path
-                        FileMovementRetryFunctions.MoveToArchiveOutputFile(file.FullName, _ArchiveFolder, 1, "IN");
-                        _AlreadyArchive_INFILE = true;
+                        _IsIN_File = true;
+                        _Original_IN_File_Path = file.FullName;
                     }
                 }
 
-                inputFiles = (new DirectoryInfo(_inputFolder)).GetFiles("*.*").ToList();
+                inputFiles = (new DirectoryInfo(_inputFolder)).GetFiles("*.edi").ToList();
 
 
 
@@ -393,7 +393,7 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                                                                , tempOutputFileName);
 
                             //the original EDI856 file will be moved from Input file path to Archive file path for archive purpose
-                            if (!_AlreadyArchive_INFILE)
+                            if (!_IsIN_File)
                             {
                                 try
                                 {
@@ -407,6 +407,8 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                             else
                             {
                                 File.Delete(filePathInput);
+                                FileMovementRetryFunctions.MoveToArchiveOutputFile(_Original_IN_File_Path, _ArchiveFolder, 1, "IN");
+                                File.Delete(_Original_IN_File_Path);
                             }
 
                         }
@@ -445,18 +447,38 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                     }
                     catch (Exception ex)
                     {
-                        #region if edi file fail move to xfailed
-                        //if input edi file is wrong, then move that file to xfailed
                         string fileFailedPath = Path.Combine(_xfailedFolder, edifilenameWithExtension);
-                        try
+                        #region if edi file fail move to xfailed
+                        //if input edi file is wrong, then move that file to xfailed - edi or in
+                        if (!_IsIN_File)
                         {
-                            FileMovementRetryFunctions.MoveToDestination(filePathInput, fileFailedPath, 1, "EDI856");
-                            Logger.Info("EDI856 file is moved to destination xfailed folder. Path: " + filePathOutput + ".xml", BuyerShortCode, DocumentCode, CorrelationId);
-                        }
-                        catch (Exception ex_mess)
+                            try
+                            {
+                                FileMovementRetryFunctions.MoveToDestination(filePathInput, fileFailedPath, 1, "EDI856");
+                                Logger.Info("EDI856 file is moved to destination xfailed folder. Path: " + filePathOutput + ".xml", BuyerShortCode, DocumentCode, CorrelationId);
+                            }
+                            catch (Exception ex_mess)
+                            {
+                                Logger.Error(" input EDI856 file cannot be moved." + ex_mess.ToString(), BuyerShortCode, DocumentCode, CorrelationId);
+                            }
+                        } else
                         {
-                            Logger.Error(" input EDI856 file cannot be moved." + ex_mess.ToString(), BuyerShortCode, DocumentCode, CorrelationId);
+                            try
+                            {
+                                string failed_IN_filename = Path.GetFileName(_Original_IN_File_Path);
+                                fileFailedPath = Path.Combine(_xfailedFolder, failed_IN_filename);
+
+                                FileMovementRetryFunctions.MoveToDestination(_Original_IN_File_Path, fileFailedPath, 1, "IN");
+                                File.Delete(filePathInput);
+                                Logger.Info("EDI856 file is moved to destination xfailed folder. Path: " + filePathOutput + ".xml", BuyerShortCode, DocumentCode, CorrelationId);
+                            }
+                            catch (Exception ex_mess)
+                            {
+                                Logger.Error(" input EDI856 file cannot be moved." + ex_mess.ToString(), BuyerShortCode, DocumentCode, CorrelationId);
+                            }
+
                         }
+
 
                         #endregion
                         Logger.Error("Program failed. CartersOSV EDI file processing is fail. File moved to xfailed folder. Path: " + fileFailedPath + " ." + ex.Message, BuyerShortCode, DocumentCode, CorrelationId);
