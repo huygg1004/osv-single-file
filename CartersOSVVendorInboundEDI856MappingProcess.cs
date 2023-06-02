@@ -453,21 +453,85 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                         string fileFailedPath = Path.Combine(_xfailedFolder, edifilenameWithExtension);
                         #region if edi file fail move to xfailed
                         //if input edi file is wrong, then move that file to xfailed - edi or in
+                        //EDI CASE
                         if (!_IsIN_File)
                         {
                             try
                             {
-                                FileMovementRetryFunctions.MoveToDestination(filePathInput, fileFailedPath, 1, "EDI856");
-                                Logger.Info("EDI856 file is moved to destination xfailed folder. Path: " + filePathOutput + ".xml", BuyerShortCode, DocumentCode, CorrelationId);
+                                //get the current edi file names being processed;
+                                var EDI_FILE_NAME = Path.GetFileName(filePathInput);
+                                var EDI_FILE_FULL_PATH_NAME = Path.GetFileName(filePathInput);
+
+                                //Log that file contains error:
+                                Logger.Info(EDI_FILE_NAME + " failed to be processed and will be moved to xfailed folder", BuyerShortCode, DocumentCode, CorrelationId);
+                                Logger.Error("Exception Message: ", ex, BuyerShortCode, DocumentCode, CorrelationId, EDI_FILE_NAME, 0);
+                                //If email success = 1 -> reported folder, =0 --> regular xfailed folder
+                                if (EmailAlerts("", EDI_FILE_NAME, EDI_FILE_FULL_PATH_NAME))
+                                {
+                                    FileMovementRetryFunctions.MoveToDestination(EDI_FILE_FULL_PATH_NAME, Path.Combine(_ReportFolder, EDI_FILE_NAME), 1, "EDI856");
+                                }
+                                else
+                                {
+                                    FileMovementRetryFunctions.MoveToDestination(EDI_FILE_FULL_PATH_NAME, Path.Combine(_xfailedFolder, EDI_FILE_NAME), 1, "EDI856");
+                                }
                             }
                             catch (Exception ex_mess)
                             {
                                 Logger.Error(" input EDI856 file cannot be moved." + ex_mess.ToString(), BuyerShortCode, DocumentCode, CorrelationId);
                             }
                         } else
+                        // IN CASE
                         {
                             try
                             {
+                                //Get the current file being process:
+                                var current_input_IN_file = _IN_INPUT_FILES_LIST[IN_FILE_COUNT];
+                                //get current in file being processed with extension:
+                                var IN_FILE_NAME = current_input_IN_file.Name;
+                                var IN_FILE_FULL_PATH_NAME = current_input_IN_file.FullName;
+
+                                //Log that file contains error:
+                                Logger.Info(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].Name + " failed to be processed and will be moved to xfailed folder", BuyerShortCode, DocumentCode, CorrelationId);
+                                Logger.Error("Exception Message: ", ex, BuyerShortCode, DocumentCode, CorrelationId, IN_FILE_NAME, 0);
+
+                                //If email success = 1 -> reported folder, =0 --> regular xfailed folder
+                                if (EmailAlerts("", IN_FILE_NAME, IN_FILE_FULL_PATH_NAME))
+                                {
+                                    FileMovementRetryFunctions.MoveToDestination(IN_FILE_FULL_PATH_NAME, Path.Combine(_ReportFolder, IN_FILE_NAME), 1, "IN");
+                                    //Try to delete any remaining edi file
+                                    string[] ediFiles = Directory.GetFiles(_inputFolder, "*.edi");
+                                    foreach (string ediFile in ediFiles)
+                                    {
+                                        string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(ediFile);
+                                        if (fileNameWithoutExtension == Path.GetFileNameWithoutExtension(IN_FILE_NAME))
+                                        {
+                                            // Match found, delete the .edi file
+                                            File.Delete(ediFile);
+                                            Console.WriteLine("Deleted file: " + ediFile);
+                                            break;
+                                        }
+                                    }
+
+                                }
+                                else
+                                {
+                                    FileMovementRetryFunctions.MoveToDestination(IN_FILE_FULL_PATH_NAME, Path.Combine(_xfailedFolder, IN_FILE_NAME), 1, "IN");
+                                    //Try to delete any remaining edi file
+                                    string[] ediFiles = Directory.GetFiles(_inputFolder, "*.edi");
+                                    foreach (string ediFile in ediFiles)
+                                    {
+                                        string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(ediFile);
+                                        if (fileNameWithoutExtension == Path.GetFileNameWithoutExtension(IN_FILE_NAME))
+                                        {
+                                            // Match found, delete the .edi file
+                                            File.Delete(ediFile);
+                                            Console.WriteLine("Deleted file: " + ediFile);
+                                            break;
+                                        }
+                                    }
+                                }
+
+
                                 string failed_IN_filename = Path.GetFileName(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].FullName);
                                 fileFailedPath = Path.Combine(_xfailedFolder, failed_IN_filename);
 
@@ -1158,7 +1222,7 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                       + "Please check and follow up with ShenZhen Development Team for further action.<br><br>"
                       + $"Regards,<br>Data Solutions Team<br>TradeLinkTechnologies Ltd.";
 
-                sendEmail.Send(receiver, ccReceiver, subject, body, FullPathForAttachment, false);
+                sendEmail.Send(receiver, ccReceiver, subject, body, FullPathForAttachment, true);
                 Logger.Info("Email Alert is sent", BuyerShortCode, DocumentCode, CorrelationId);
                 return true;
             }
