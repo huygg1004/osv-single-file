@@ -31,7 +31,7 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
         private readonly string _xfailedFolder;
 
         public bool _IsIN_File;
-        public string _Original_IN_File_Path;
+        public List<FileInfo> _IN_INPUT_FILES_LIST;
 
         private readonly string _fileRetryMovement_Connection_String;
 
@@ -84,17 +84,21 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                         File.Copy(file.FullName, newFileName);
 
                         _IsIN_File = true;
-                        _Original_IN_File_Path = file.FullName;
                     }
                 }
 
                 inputFiles = (new DirectoryInfo(_inputFolder)).GetFiles("*.edi").ToList();
+                if (_IsIN_File)
+                {
+                    _IN_INPUT_FILES_LIST = (new DirectoryInfo(_inputFolder)).GetFiles("*.in").ToList();
+                }
 
-
+                int IN_FILE_COUNT = 0;
 
                 foreach (FileInfo fl in inputFiles)
                 {
                     filenumberinLoop++;
+                    
 
                     #region directory initialization
                     string edifilenameWithExtension = Path.GetFileName(fl.FullName);
@@ -407,8 +411,7 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                             else
                             {
                                 File.Delete(filePathInput);
-                                FileMovementRetryFunctions.MoveToArchiveOutputFile(_Original_IN_File_Path, _ArchiveFolder, 1, "IN");
-                                File.Delete(_Original_IN_File_Path);
+                                FileMovementRetryFunctions.MoveToArchiveOutputFile(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].FullName, _ArchiveFolder, 1, "IN");
                             }
 
                         }
@@ -465,10 +468,10 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                         {
                             try
                             {
-                                string failed_IN_filename = Path.GetFileName(_Original_IN_File_Path);
+                                string failed_IN_filename = Path.GetFileName(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].FullName);
                                 fileFailedPath = Path.Combine(_xfailedFolder, failed_IN_filename);
 
-                                FileMovementRetryFunctions.MoveToDestination(_Original_IN_File_Path, fileFailedPath, 1, "IN");
+                                FileMovementRetryFunctions.MoveToDestination(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].FullName, fileFailedPath, 1, "IN");
                                 File.Delete(filePathInput);
                                 Logger.Info("EDI856 file is moved to destination xfailed folder. Path: " + filePathOutput + ".xml", BuyerShortCode, DocumentCode, CorrelationId);
                             }
@@ -483,6 +486,8 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                         #endregion
                         Logger.Error("Program failed. CartersOSV EDI file processing is fail. File moved to xfailed folder. Path: " + fileFailedPath + " ." + ex.Message, BuyerShortCode, DocumentCode, CorrelationId);
                     }
+
+                    IN_FILE_COUNT++;
                 }
             }
             catch (Exception ex)
