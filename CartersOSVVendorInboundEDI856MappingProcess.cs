@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Data;
+using System.Data.SqlClient;
 using System.IO;
 using System.Linq;
 
@@ -62,8 +63,124 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
             _ReportFolder = ConfigurationManager.AppSettings["CRR_856IN_ReportedFilePath"];
             _fileRetryMovement_Connection_String = ConfigurationManager.ConnectionStrings["FileRetryMovementDB"].ConnectionString;
         }
+
+        public class FileTransferRecord
+        {
+            public long Id { get; set; }
+            public string BuyerCode { get; set; }
+            public string DocType { get; set; }
+            public string SourceFile { get; set; }
+            public string DestinationPath { get; set; }
+            public string Action { get; set; }
+            public DateTime CreatedTime { get; set; }
+        }
+
+        public void ResolveFileRetryMovement_Files()
+        {
+            // Initialize FileMovementRetry instance
+            FileMovementRetry FileMovementRetryFunctions = new FileMovementRetry(BuyerShortCode, _fileRetryMovement_Connection_String);
+
+            // Check for existing records with BuyerCode = 'CRR' and Action = 'MOVE'
+            bool hasRecords = CheckExistingRecords("CRR", "MOVE");
+
+            // If there are records, perform file movement and continue recursively
+            if (hasRecords)
+            {
+                // Get the records with BuyerCode = 'CRR' and Action = 'MOVE'
+                List<FileTransferRecord> records = GetRecordsByBuyerCode("CRR", "MOVE");
+
+                foreach (FileTransferRecord record in records)
+                {
+                    // Perform file movement using FileMovementRetryFunctions
+                    FileMovementRetryFunctions.MoveToDestination(record.SourceFile, record.DestinationPath, 1, record.DocType);
+
+                    // Delete the processed record from the database
+                    DeleteRecord(record.Id);
+                }
+
+                // Recursive call to continue resolving remaining records
+                ResolveFileRetryMovement_Files();
+            }
+        }
+
+        // Helper method to delete a record by its Id
+        private void DeleteRecord(long recordId)
+        {
+            using (SqlConnection connection = new SqlConnection(_fileRetryMovement_Connection_String))
+            {
+                connection.Open();
+
+                // Execute SQL command to delete the record
+                SqlCommand command = new SqlCommand("DELETE FROM [dbo].[FileTransferRecord] WHERE [Id] = @RecordId", connection);
+                command.Parameters.AddWithValue("@RecordId", recordId);
+
+                command.ExecuteNonQuery();
+            }
+        }
+
+        // Helper method to check if there are existing records with a given BuyerCode and Action
+        private bool CheckExistingRecords(string buyerCode, string action)
+        {
+            using (SqlConnection connection = new SqlConnection(_fileRetryMovement_Connection_String))
+            {
+                connection.Open();
+
+                // Execute SQL query to check for records
+                SqlCommand command = new SqlCommand("SELECT COUNT(*) FROM [dbo].[FileTransferRecord] WHERE [BuyerCode] = @BuyerCode AND [Action] = @Action", connection);
+                command.Parameters.AddWithValue("@BuyerCode", buyerCode);
+                command.Parameters.AddWithValue("@Action", action);
+
+                int count = (int)command.ExecuteScalar();
+
+                return count > 0;
+            }
+        }
+
+        // Helper method to retrieve records with a given BuyerCode and Action
+        private List<FileTransferRecord> GetRecordsByBuyerCode(string buyerCode, string action)
+        {
+            List<FileTransferRecord> records = new List<FileTransferRecord>();
+
+            using (SqlConnection connection = new SqlConnection(_fileRetryMovement_Connection_String))
+            {
+                connection.Open();
+
+                // Execute SQL query to retrieve records
+                SqlCommand command = new SqlCommand("SELECT * FROM [dbo].[FileTransferRecord] WHERE [BuyerCode] = @BuyerCode AND [Action] = @Action", connection);
+                command.Parameters.AddWithValue("@BuyerCode", buyerCode);
+                command.Parameters.AddWithValue("@Action", action);
+
+                SqlDataReader reader = command.ExecuteReader();
+
+                while (reader.Read())
+                {
+                    FileTransferRecord record = new FileTransferRecord()
+                    {
+                        Id = (long)reader["Id"],
+                        BuyerCode = (string)reader["BuyerCode"],
+                        DocType = (string)reader["DocType"],
+                        SourceFile = (string)reader["SourceFile"],
+                        DestinationPath = (string)reader["DestinationPath"],
+                        Action = (string)reader["Action"],
+                        CreatedTime = (DateTime)reader["CreatedTime"]
+                    };
+
+                    records.Add(record);
+                }
+
+                reader.Close();
+            }
+
+            return records;
+        }
+
+
+
         public void DoWork()
         {
+            //Try to clear any records in File Retry movement Db
+            ResolveFileRetryMovement_Files();
+
             int filenumberinLoop = 0;
             Logger.Info("Entering CartersOSVVendorInboundEDI856MappingProcess.CartersOSVInboundEDI856Process.DoWork...", BuyerShortCode, DocumentCode, CorrelationId);
             FileMovementRetry FileMovementRetryFunctions = new FileMovementRetry(BuyerShortCode, _fileRetryMovement_Connection_String);
