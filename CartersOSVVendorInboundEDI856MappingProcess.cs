@@ -1,5 +1,6 @@
 using DataSolutions.ApplicationFramework;
 using DataSolutions.Commons.EDI.EdiTools;
+using DataSolutions.Commons.Extensions;
 using DataSolutions.Commons.FileMovementRetry;
 using DataSolutions.DataModels.Xml.ShipNotice;
 using DataSolutions.DataModelTools.Xml;
@@ -17,6 +18,8 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
 {
     public class CartersOSVInboundEDI856Process : DataSolutionsServiceBase
     {
+        #region InitVars
+
         private const string BUYER_SHORT_CODE = "CRR";
         private const string DOCUMENT_CODE = "ASN";
         private const string BOUND = "INBOUND";
@@ -44,6 +47,8 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
         public static string body;
         public static EmailSender sendEmail = new EmailSender();
 
+        #endregion InitVars
+
 
         public CartersOSVInboundEDI856Process(Logger logger) : base(logger, Guid.NewGuid())
         {
@@ -63,6 +68,40 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
             _ReportFolder = ConfigurationManager.AppSettings["CRR_856IN_ReportedFilePath"];
             _fileRetryMovement_Connection_String = ConfigurationManager.ConnectionStrings["FileRetryMovementDB"].ConnectionString;
         }
+
+        public void DeleteAllFilesInFolders()
+        {
+            string[] folders = new string[]
+            {
+                _inputFolder,
+                _workingFolder,
+                _outputFolder,
+                _outputFolder_FA,
+                _xfailedFolder,
+                _ArchiveFolder,
+                _ReportFolder
+            };
+
+            foreach (string folder in folders)
+            {
+                DeleteFilesInFolder(folder);
+            }
+        }
+
+        // Helper method to delete files in a folder
+        private void DeleteFilesInFolder(string folderPath)
+        {
+            if (Directory.Exists(folderPath))
+            {
+                string[] files = Directory.GetFiles(folderPath);
+
+                foreach (string file in files)
+                {
+                    File.Delete(file);
+                }
+            }
+        }
+
 
         public class FileTransferRecord
         {
@@ -88,19 +127,39 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
             {
                 // Get the records with BuyerCode = 'CRR' and Action = 'MOVE'
                 List<FileTransferRecord> records = GetRecordsByBuyerCode("CRR", "MOVE");
+                Logger.Info($"Entering ResolveFileRetryMovement_Files... Found {records.Count} records", BuyerShortCode, DocumentCode, CorrelationId);
 
                 foreach (FileTransferRecord record in records)
                 {
-                    // Perform file movement using FileMovementRetryFunctions
-                    FileMovementRetryFunctions.MoveToDestination(record.SourceFile, record.DestinationPath, 1, record.DocType);
+                    // Check if both SourceFile and DestinationPath are valid paths
+                    if (!string.IsNullOrEmpty(record.SourceFile) && !string.IsNullOrEmpty(record.DestinationPath))
+                    {
+                        // Perform file movement using FileMovementRetryFunctions
+                        FileMovementRetryFunctions.MoveToDestination(record.SourceFile, record.DestinationPath, record.DocType, _workingFolder);
 
-                    // Delete the processed record from the database
-                    DeleteRecord(record.Id);
+                        // Log the success of the file movement
+                        Logger.Info($"Moved file from {record.SourceFile} to {record.DestinationPath} successfully.", BuyerShortCode, DocumentCode, CorrelationId);
+
+                        // Delete the processed record from the database
+                        DeleteRecord(record.Id);
+                    }
+                    else
+                    {
+                        // If either SourceFile or DestinationPath is not valid, quit the function
+                        return;
+                    }
                 }
-
                 // Recursive call to continue resolving remaining records
                 ResolveFileRetryMovement_Files();
             }
+            Logger.Info("Leaving ResolveFileRetryMovement_Files", BuyerShortCode, DocumentCode, CorrelationId);
+        }
+
+
+        // Helper method to check if a path is valid
+        private bool IsValidPath(string path)
+        {
+            return !string.IsNullOrWhiteSpace(path) && Path.IsPathRooted(path) && File.Exists(path);
         }
 
         // Helper method to delete a record by its Id
@@ -178,6 +237,8 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
 
         public void DoWork()
         {
+            //DeleteAllFilesInFolders();
+
             //Try to clear any records in File Retry movement Db
             ResolveFileRetryMovement_Files();
 
@@ -187,6 +248,8 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
 
             try
             {
+                #region handlingINFiles
+
                 List<FileInfo> inputINfiles = new List<FileInfo>();
                 var inputFiles = (new DirectoryInfo(_inputFolder)).GetFiles("*.*").ToList();
 
@@ -209,6 +272,9 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                 {
                     _IN_INPUT_FILES_LIST = (new DirectoryInfo(_inputFolder)).GetFiles("*.in").ToList();
                 }
+
+                #endregion handlingINFiles
+
 
                 int IN_FILE_COUNT = 0;
 
@@ -518,7 +584,10 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                             {
                                 try
                                 {
-                                    FileMovementRetryFunctions.MoveToArchiveOutputFile(filePathInput, _ArchiveFolder, 1, "EDI856");
+                                    bool isMoveSuccess = FileMovementRetryFunctions.MoveToArchiveOutputFile(filePathInput, _ArchiveFolder, "EDI856", _workingFolder);
+                                    string fileName = Path.GetFileName(filePathInput);
+                                    string logMessage = isMoveSuccess ? "File move success" : "Failed to move file";
+                                    Logger.Error($"{logMessage}: {fileName}, destination path: {_ArchiveFolder}", BuyerShortCode, DocumentCode, CorrelationId);
                                 }
                                 catch (Exception ex)
                                 {
@@ -528,7 +597,10 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                             else
                             {
                                 File.Delete(filePathInput);
-                                FileMovementRetryFunctions.MoveToArchiveOutputFile(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].FullName, _ArchiveFolder, 1, "IN");
+                                bool isMoveSuccess = FileMovementRetryFunctions.MoveToArchiveOutputFile(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].FullName, _ArchiveFolder, "IN", _workingFolder);
+                                string fileName = Path.GetFileName(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].FullName);
+                                string logMessage = isMoveSuccess ? "File move success" : "Failed to move file";
+                                Logger.Error($"{logMessage}: {fileName}, destination path: {_ArchiveFolder}", BuyerShortCode, DocumentCode, CorrelationId);
                             }
 
                         }
@@ -543,7 +615,7 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                         //Output XML856 file will be copied from Working file path to Output file path.
                         try
                         {
-                            FileMovementRetryFunctions.CopyToDestination(filePathWorking + ".xml", filePathOutput + ".xml", 1, "XML856");
+                            FileMovementRetryFunctions.CopyToDestination(filePathWorking + ".xml", filePathOutput + ".xml", "XML856", _workingFolder);
                             Logger.Info("XML file is copied to Output folder. Path: " + filePathOutput + ".xml", BuyerShortCode, DocumentCode, CorrelationId);
                         }
                         catch (Exception ex)
@@ -554,11 +626,14 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                         //Output XML856 file will be moved from Working file path to Archive file path.
                         try
                         {
-                            FileMovementRetryFunctions.MoveToArchiveOutputFile(filePathWorking + ".xml", _ArchiveFolder, 1, "XML856");
+                            bool isMoveSuccess = FileMovementRetryFunctions.MoveToArchiveOutputFile(filePathWorking + ".xml", _ArchiveFolder, "XML856", _workingFolder);
+                            string fileName = Path.GetFileName(filePathWorking + ".xml");
+                            string logMessage = isMoveSuccess ? "File move success" : "Failed to move file";
+                            Logger.Error($"{logMessage}: {fileName}, destination path: {_ArchiveFolder}", BuyerShortCode, DocumentCode, CorrelationId);
                         }
                         catch (Exception ex)
                         {
-                            Logger.Error(" output XML856 file cannot be archived from tmp." + ex.ToString(), BuyerShortCode, DocumentCode, CorrelationId);
+                            Logger.Error("Output XML856 file cannot be archived from tmp." + ex.ToString(), BuyerShortCode, DocumentCode, CorrelationId);
                         }
                         #endregion
 
@@ -585,11 +660,11 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                                 //If email success = 1 -> reported folder, =0 --> regular xfailed folder
                                 if (EmailAlerts("", EDI_FILE_NAME, EDI_FILE_FULL_PATH_NAME))
                                 {
-                                    FileMovementRetryFunctions.MoveToDestination(EDI_FILE_FULL_PATH_NAME, Path.Combine(_ReportFolder, EDI_FILE_NAME), 1, "EDI856");
+                                    FileMovementRetryFunctions.MoveToDestination(EDI_FILE_FULL_PATH_NAME, Path.Combine(_ReportFolder, EDI_FILE_NAME), "EDI856", _workingFolder);
                                 }
                                 else
                                 {
-                                    FileMovementRetryFunctions.MoveToDestination(EDI_FILE_FULL_PATH_NAME, Path.Combine(_xfailedFolder, EDI_FILE_NAME), 1, "EDI856");
+                                    FileMovementRetryFunctions.MoveToDestination(EDI_FILE_FULL_PATH_NAME, Path.Combine(_xfailedFolder, EDI_FILE_NAME), "EDI856", _workingFolder);
                                 }
                             }
                             catch (Exception ex_mess)
@@ -614,7 +689,6 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                                 //If email success = 1 -> reported folder, =0 --> regular xfailed folder
                                 if (EmailAlerts("", IN_FILE_NAME, IN_FILE_FULL_PATH_NAME))
                                 {
-                                    FileMovementRetryFunctions.MoveToDestination(IN_FILE_FULL_PATH_NAME, Path.Combine(_ReportFolder, IN_FILE_NAME), 1, "IN");
                                     //Try to delete any remaining edi file
                                     string[] ediFiles = Directory.GetFiles(_inputFolder, "*.edi");
                                     foreach (string ediFile in ediFiles)
@@ -629,10 +703,12 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                                         }
                                     }
 
+                                    bool IsMoveSuccess = FileMovementRetryFunctions.MoveToDestination(IN_FILE_FULL_PATH_NAME, Path.Combine(_ReportFolder, IN_FILE_NAME),"IN", _workingFolder);
+                                    string logMessage = IsMoveSuccess ? IN_FILE_NAME + " is moved successfully to destination xfailed/reported folder." : IN_FILE_NAME + " is NOT moved successfully to destination xfailed/reported folder, will be in tmp folder for process next cycle.";
+                                    Logger.Info(logMessage, BuyerShortCode, DocumentCode, CorrelationId);
                                 }
                                 else
                                 {
-                                    FileMovementRetryFunctions.MoveToDestination(IN_FILE_FULL_PATH_NAME, Path.Combine(_xfailedFolder, IN_FILE_NAME), 1, "IN");
                                     //Try to delete any remaining edi file
                                     string[] ediFiles = Directory.GetFiles(_inputFolder, "*.edi");
                                     foreach (string ediFile in ediFiles)
@@ -646,15 +722,21 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                                             break;
                                         }
                                     }
+
+
+                                    bool IsMoveSuccess = FileMovementRetryFunctions.MoveToDestination(IN_FILE_FULL_PATH_NAME, Path.Combine(_xfailedFolder, IN_FILE_NAME), "IN", _workingFolder);
+                                    string logMessage = IsMoveSuccess ? IN_FILE_NAME+ " is moved successfully to destination xfailed folder." : IN_FILE_NAME + " is NOT moved successfully to destination xfailed folder, will be in tmp folder for process next cycle.";
+                                    Logger.Info(logMessage, BuyerShortCode, DocumentCode, CorrelationId);
+
                                 }
 
 
-                                string failed_IN_filename = Path.GetFileName(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].FullName);
-                                fileFailedPath = Path.Combine(_xfailedFolder, failed_IN_filename);
+                                //string failed_IN_filename = Path.GetFileName(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].FullName);
+                                //fileFailedPath = Path.Combine(_xfailedFolder, failed_IN_filename);
 
-                                FileMovementRetryFunctions.MoveToDestination(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].FullName, fileFailedPath, 1, "IN");
-                                File.Delete(filePathInput);
-                                Logger.Info("EDI856 file is moved to destination xfailed folder. Path: " + filePathOutput + ".xml", BuyerShortCode, DocumentCode, CorrelationId);
+                                //FileMovementRetryFunctions.MoveToDestination(_IN_INPUT_FILES_LIST[IN_FILE_COUNT].FullName, fileFailedPath, 1, "IN");
+                                //File.Delete(filePathInput);
+                                //Logger.Info("EDI856 file is moved to destination xfailed folder. Path: " + filePathOutput + ".xml", BuyerShortCode, DocumentCode, CorrelationId);
                             }
                             catch (Exception ex_mess)
                             {
@@ -665,7 +747,7 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
 
 
                         #endregion
-                        Logger.Error("Program failed. CartersOSV EDI file processing is fail. File moved to xfailed folder. Path: " + fileFailedPath + " ." + ex.Message, BuyerShortCode, DocumentCode, CorrelationId);
+                        Logger.Error("Program failed.", BuyerShortCode, DocumentCode, CorrelationId);
                     }
 
                     IN_FILE_COUNT++;
@@ -1289,13 +1371,13 @@ namespace CartersOSVVendorInboundEDI856MappingProcess
                 if (EmailAlerts(GetSegmentValue(ediDocument, "BSN", 2), ediFileName, edifilenameWithExtension))
                 {
                     FileMovementRetry FileMovementRetryFunctions = new FileMovementRetry(BuyerShortCode, _fileRetryMovement_Connection_String);
-                    FileMovementRetryFunctions.MoveToDestination(Path.Combine(_inputFolder, ediFileName + ".edi"), Path.Combine(_ReportFolder, ediFileName + ".edi"), 1, "EDI856");
+                    FileMovementRetryFunctions.MoveToDestination(Path.Combine(_inputFolder, ediFileName + ".edi"), Path.Combine(_ReportFolder, ediFileName + ".edi"), "EDI856", _workingFolder);
                 }
                 //send email failed
                 else
                 {
                     FileMovementRetry FileMovementRetryFunctions = new FileMovementRetry(BuyerShortCode, _fileRetryMovement_Connection_String);
-                    FileMovementRetryFunctions.MoveToDestination(Path.Combine(_inputFolder, ediFileName + ".edi"), Path.Combine(_xfailedFolder, ediFileName + ".edi"), 1, "EDI856");
+                    FileMovementRetryFunctions.MoveToDestination(Path.Combine(_inputFolder, ediFileName + ".edi"), Path.Combine(_xfailedFolder, ediFileName + ".edi"), "EDI856", _workingFolder);
                 }
                 #endregion
             }
